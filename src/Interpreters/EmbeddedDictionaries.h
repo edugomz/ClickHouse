@@ -41,6 +41,8 @@ private:
     ActionBlocker reload_blocker;
 
     mutable std::mutex mutex;
+    /// A load was skipped because of `SYSTEM STOP RELOAD DICTIONARIES`. Guarded by `mutex`.
+    bool reload_skipped_while_stopped = false;
 
     ThreadFromGlobalPool reloading_thread;
     Poco::Event destroy;
@@ -78,6 +80,9 @@ public:
     void reload();
 
     ActionLock getActionLock();
+
+    /// Makes the load skipped while reloads were stopped, if any, without waiting for the next periodic one.
+    void reloadSkippedWhileStopped();
 
     ~EmbeddedDictionaries();
 

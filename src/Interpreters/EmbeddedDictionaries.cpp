@@ -69,7 +69,8 @@ bool EmbeddedDictionaries::reloadImpl(const bool throw_on_error, const bool forc
 
     if (reload_blocker.isCancelled())
     {
-        LOG_INFO(log, "Loading of embedded dictionaries is stopped.");
+        LOG_DEBUG(log, "Loading of embedded dictionaries is stopped.");
+        reload_skipped_while_stopped = true;
         return false;
     }
 
@@ -121,6 +122,11 @@ void EmbeddedDictionaries::reloadPeriodically()
             cur_reload_period = reload_period;
             is_fast_start_stage = false;
         }
+        else if (reload_blocker.isCancelled())
+        {
+            /// Skipped, not failed: keep the fast start delay, `reloadSkippedWhileStopped` runs the load on start.
+            continue;
+        }
 
         if (is_fast_start_stage)
         {
@@ -160,6 +166,17 @@ void EmbeddedDictionaries::reload()
 ActionLock EmbeddedDictionaries::getActionLock()
 {
     return reload_blocker.cancel();
+}
+
+void EmbeddedDictionaries::reloadSkippedWhileStopped()
+{
+    {
+        std::lock_guard lock(mutex);
+        if (!reload_skipped_while_stopped)
+            return;
+        reload_skipped_while_stopped = false;
+    }
+    reloadImpl(false);
 }
 
 }

@@ -364,6 +364,8 @@ void InterpreterSystemQuery::startStopReloadDictionaries(bool start)
         /// Requeue config-driven reloads and eager initial loads that were skipped while stopped
         /// they won't be retried on their own since the periodic updater only reacts to a changed config.
         getContext()->getExternalDictionariesLoader().reloadBlockedObjects();
+        /// The periodic reload of embedded dictionaries can be up to `builtin_dictionaries_reload_interval` away.
+        getContext()->getEmbeddedDictionaries().reloadSkippedWhileStopped();
         return;
     }
 
