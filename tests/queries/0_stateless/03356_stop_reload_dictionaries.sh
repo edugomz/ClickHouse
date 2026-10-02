@@ -7,6 +7,9 @@ CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 set -e -o pipefail
 
+# Reloads are stopped server-wide: never leave them stopped, even when the test fails.
+trap '$CLICKHOUSE_CLIENT --query "SYSTEM START RELOAD DICTIONARIES"' EXIT
+
 function wait_for_dict_upate()
 {
     for ((i = 0; i < 100; ++i)); do
@@ -101,5 +104,19 @@ $CLICKHOUSE_CLIENT --query "SYSTEM RELOAD DICTIONARIES"
 $CLICKHOUSE_CLIENT --query "SELECT '12 (4) -> ', dictGetInt64('${CLICKHOUSE_DATABASE}.dict', 'y', toUInt64(12))"
 $CLICKHOUSE_CLIENT --query "SELECT '13 (4) -> ', dictGetInt64('${CLICKHOUSE_DATABASE}.dict', 'y', toUInt64(13))"
 $CLICKHOUSE_CLIENT --query "SELECT '14 (4) -> ', dictGetInt64('${CLICKHOUSE_DATABASE}.dict', 'y', toUInt64(14))"
+
+# The ON CLUSTER forms go through the DDL queue and act like the plain ones.
+$CLICKHOUSE_CLIENT --distributed_ddl_output_mode=none --query "SYSTEM STOP RELOAD DICTIONARIES ON CLUSTER test_shard_localhost"
+
+set +e
+OUT=$($CLICKHOUSE_CLIENT --query "SYSTEM RELOAD DICTIONARIES" 2>&1)
+set -e
+
+if ! echo "$OUT" | grep -q "DB::Exception"; then
+  echo "Expected DB::Exception after SYSTEM STOP RELOAD DICTIONARIES ON CLUSTER"
+fi
+
+$CLICKHOUSE_CLIENT --distributed_ddl_output_mode=none --query "SYSTEM START RELOAD DICTIONARIES ON CLUSTER test_shard_localhost"
+$CLICKHOUSE_CLIENT --query "SYSTEM RELOAD DICTIONARIES"
 
 $CLICKHOUSE_CLIENT --query "DROP DICTIONARY ${CLICKHOUSE_DATABASE}.dict"

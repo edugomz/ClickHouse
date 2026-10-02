@@ -11,6 +11,9 @@ CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 set -e -o pipefail
 
+# Reloads are stopped server-wide: never leave them stopped, even when the test fails.
+trap '$CLICKHOUSE_CLIENT --query "SYSTEM START RELOAD DICTIONARIES"' EXIT
+
 function wait_for_dict_update()
 {
     for ((i = 0; i < 100; ++i)); do
