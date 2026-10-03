@@ -325,11 +325,15 @@ where `web` is from the server configuration file:
 
 ### Using S3 Storage {#s3-storage}
 
+<Note>
+Before you set up a bucket for an S3 disk, see [Best practices for S3 disks](/integrations/connectors/data-ingestion/AWS/integrating-s3-with-clickhouse#s3-disk-best-practices).
+</Note>
+
 #### Required parameters {#required-parameters-s3}
 
 | Parameter           | Description                                                                                                                                                                            |
 |---------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `endpoint`          | S3 endpoint URL in `path` or `virtual hosted` [styles](https://docs.aws.amazon.com/AmazonS3/latest/dev/VirtualHosting.html). Should include the bucket and root path for data storage. |
+| `endpoint`          | S3 endpoint URL in `path` or `virtual hosted` [styles](https://docs.aws.amazon.com/AmazonS3/latest/dev/VirtualHosting.html). Should include the bucket and root path for data storage. Can contain [macros](/reference/settings/server-settings/settings/other#macros), such as `{replica}`, to give each server its own path. |
 | `access_key_id`     | S3 access key ID used for authentication.                                                                                                                                              |
 | `secret_access_key` | S3 secret access key used for authentication.                                                                                                                                          |
 

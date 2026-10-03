@@ -814,6 +814,83 @@ You should see something like the following:
 
 <Image img="/images/integrations/data-ingestion/s3/s3-j.webp" size="lg" border alt="S3 bucket view in AWS console showing ClickHouse data files stored in S3" />
 
+## Best practices for S3 disks {#s3-disk-best-practices}
+
+A `MergeTree` table on an `s3` disk keeps its data in the bucket, and the metadata that maps every object to a file of a part on the server's local disk.
+Only that server knows which objects it uses.
+The bucket settings below either break that link or keep data in the bucket that nothing uses.
+
+### Abort incomplete multipart uploads {#s3-abort-incomplete-multipart-uploads}
+
+ClickHouse writes large files with multipart uploads.
+It aborts an upload that fails, but a server that crashes or is killed during an upload leaves the uploaded parts in the bucket, and the server does not clean them up when it restarts.
+Incomplete uploads are not objects, so they do not show up in object listings, but the storage they use is billed.
+Add a lifecycle rule that aborts incomplete multipart uploads after a few days.
+For Amazon S3, see [Configuring a bucket lifecycle configuration to delete incomplete multipart uploads](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).
+
+### Do not expire or delete objects outside ClickHouse {#s3-do-not-delete-objects}
+
+ClickHouse deletes the objects of a part itself when the part is no longer needed, for example after a merge, a mutation or a `DROP TABLE`.
+Do not add lifecycle rules that expire objects under the disk's path, and do not delete them by hand.
+A query that reads a missing object fails with `The specified key does not exist`, and the [`DiskS3NoSuchKeyErrors`](/reference/system-tables/metrics#disks3nosuchkeyerrors) metric grows.
+A `ReplicatedMergeTree` table can fetch the part again from another replica, but a `MergeTree` table has no other copy.
+To keep data for a limited time, use a [table TTL](/reference/engines/table-engines/mergetree-family/mergetree#table_engine-mergetree-ttl) instead.
+
+### Do not enable versioning {#s3-do-not-enable-versioning}
+
+ClickHouse deletes objects without a version ID.
+In a bucket with versioning enabled, a delete only adds a delete marker, so the data of every part removed by a merge, a mutation or a `DROP TABLE` stays in the bucket as noncurrent versions.
+Because merges rewrite data all the time, these versions grow with the amount of data written, not with the size of the tables.
+If versioning has to stay enabled, add a lifecycle rule that expires noncurrent versions.
+
+### Do not use bucket replication {#s3-do-not-use-bucket-replication}
+
+The objects of an `s3` disk cannot be turned back into tables on their own: which object belongs to which file is recorded only in the server's local metadata.
+A replicated bucket therefore doubles the storage cost without giving you a copy that you can restore.
+To keep a copy of the data in another bucket or region, use [`BACKUP`](/concepts/features/backup-restore/overview), or a replica of a `ReplicatedMergeTree` table with a disk of its own.
+
+### Do not use FUSE over S3 as a local disk {#s3-do-not-use-fuse}
+
+Tools such as s3fs or Mountpoint for Amazon S3 mount a bucket as a file system, but they do not support hard links or atomic renames of directories.
+A `MergeTree` table on a local disk relies on both: hard links for mutations, `ALTER TABLE ... FREEZE` and backups, and directory renames to commit parts.
+Configure an `s3` disk instead.
+
+### Give each server its own path {#s3-one-path-per-server}
+
+Object keys are random, and each server records only the objects it writes, so a server cannot track or clean up the objects that another server writes to the same path.
+Disks with [`plain_rewritable` metadata](/concepts/features/configuration/server-config/storing-data#s3-plain-rewritable-storage) keep their metadata in the bucket and build it at startup by listing their path.
+Servers that share such a path see each other's files, and one server can delete data that another one still reads.
+
+Give every server its own path.
+The `endpoint` and `endpoint_subpath` parameters expand [macros](/reference/settings/server-settings/settings/other#macros), so one configuration file can serve all servers:
+
+```xml
+<endpoint>https://my-bucket.s3.amazonaws.com/clickhouse/{shard}/{replica}/</endpoint>
+```
+
+### Use a separate bucket for ClickHouse {#s3-separate-bucket}
+
+Lifecycle rules, versioning, replication and access policies are set for a whole bucket.
+In a bucket shared with other workloads, a setting that suits them, such as an expiration rule, can also apply to ClickHouse's objects.
+
+### Check for orphaned objects {#s3-check-orphaned-objects}
+
+Objects that no server references stay in the bucket and are billed, for example after a server has lost its local metadata.
+To find them, compare the size of the disk's path in the bucket with the size of the files that ClickHouse references, from [`system.remote_data_paths`](/reference/system-tables/remote_data_paths):
+
+```sql
+SELECT formatReadableSize(sum(size)) AS referenced
+FROM
+(
+    SELECT DISTINCT remote_path, size
+    FROM system.remote_data_paths
+    WHERE disk_name = 's3_disk'
+)
+```
+
+A path much larger than `referenced` holds orphaned objects.
+A path smaller than `referenced` is missing objects that were deleted outside ClickHouse.
+
 ## Replicating a single shard across two AWS regions using S3 Object Storage {#s3-multi-region}
 
 <Tip>
