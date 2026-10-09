@@ -119,6 +119,10 @@
 #include <IO/S3/Client.h>
 #endif
 
+#if USE_FILELOG
+#include <Storages/FileLog/StorageFileLog.h>
+#endif
+
 #if USE_JEMALLOC
 #    include <Processors/Sources/JemallocProfileSource.h>
 #    include <Common/Jemalloc.h>
@@ -596,6 +600,10 @@ BlockIO InterpreterSystemQuery::execute()
             getContext()->checkAccess(AccessType::SYSTEM_DROP_UNCOMPRESSED_CACHE);
             system_context->clearUncompressedCache();
             break;
+        case Type::CLEAR_COLUMNS_CACHE:
+            getContext()->checkAccess(AccessType::SYSTEM_DROP_COLUMNS_CACHE);
+            system_context->clearColumnsCache();
+            break;
         case Type::CLEAR_INDEX_MARK_CACHE:
             getContext()->checkAccess(AccessType::SYSTEM_DROP_MARK_CACHE);
             system_context->clearIndexMarkCache();
@@ -967,7 +975,7 @@ BlockIO InterpreterSystemQuery::execute()
         case Type::RECONNECT_ZOOKEEPER:
         {
             getContext()->checkAccess(AccessType::SYSTEM_RECONNECT_ZOOKEEPER);
-            system_context->reconnectZooKeeper("triggered via SYSTEM RECONNECT ZOOKEEPER command");
+            getContext()->reconnectZooKeeper("triggered via SYSTEM RECONNECT ZOOKEEPER command");
             break;
         }
         case Type::STOP_MERGES:
@@ -1140,6 +1148,9 @@ BlockIO InterpreterSystemQuery::execute()
             break;
         case Type::FLUSH_OBJECT_STORAGE_QUEUE:
             flushObjectStorageQueue(query);
+            break;
+        case Type::RESET_FILELOG:
+            resetFileLog(query);
             break;
         case Type::RESTART_REPLICAS:
             restartReplicas(system_context);
@@ -2666,6 +2677,27 @@ void InterpreterSystemQuery::flushObjectStorageQueue(ASTSystemQuery & query)
     queue->waitForPathToBeProcessed(query.queue_path, context);
 }
 
+void InterpreterSystemQuery::resetFileLog([[maybe_unused]] ASTSystemQuery & query)
+{
+    getContext()->checkAccess(AccessType::SYSTEM_RESET_FILELOG, table_id);
+#if USE_FILELOG
+    auto file_log = castStorage<StorageFileLog>(DatabaseCatalog::instance().getTable(table_id, getContext()), DeferredTable::Load);
+    if (!file_log)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Table {} is not a FileLog table", table_id.getNameForLogs());
+    std::optional<UInt64> offset = 0;
+    if (query.filelog_file)
+    {
+        if (query.filelog_offset)
+            offset = query.filelog_offset;
+        else if (query.filelog_to_end)
+            offset = std::nullopt;
+    }
+    file_log->resetReadPosition(query.filelog_file, offset);
+#else
+    throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "The server was compiled without FileLog support");
+#endif
+}
+
 RefreshTaskList InterpreterSystemQuery::getRefreshTasks()
 {
     auto ctx = getContext();
@@ -2916,6 +2948,9 @@ AccessRightsElements InterpreterSystemQuery::getRequiredAccessForDDLOnCluster() 
             break;
         case Type::CLEAR_COMPILED_EXPRESSION_CACHE:
             required_access.emplace_back(AccessType::SYSTEM_DROP_COMPILED_EXPRESSION_CACHE);
+            break;
+        case Type::CLEAR_COLUMNS_CACHE:
+            required_access.emplace_back(AccessType::SYSTEM_DROP_COLUMNS_CACHE);
             break;
         case Type::CLEAR_UNCOMPRESSED_CACHE:
             required_access.emplace_back(AccessType::SYSTEM_DROP_UNCOMPRESSED_CACHE);
@@ -3236,6 +3271,11 @@ AccessRightsElements InterpreterSystemQuery::getRequiredAccessForDDLOnCluster() 
         case Type::FLUSH_OBJECT_STORAGE_QUEUE:
         {
             required_access.emplace_back(AccessType::SYSTEM_FLUSH_OBJECT_STORAGE_QUEUE, query.getDatabase(), query.getTable());
+            break;
+        }
+        case Type::RESET_FILELOG:
+        {
+            required_access.emplace_back(AccessType::SYSTEM_RESET_FILELOG, query.getDatabase(), query.getTable());
             break;
         }
         case Type::FLUSH_LOGS:
