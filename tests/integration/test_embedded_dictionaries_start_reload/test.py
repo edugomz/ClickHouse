@@ -1,5 +1,4 @@
 import os
-import time
 
 import pytest
 
@@ -30,7 +29,9 @@ def test_start_reload_loads_embedded_dictionaries_skipped_while_stopped(started_
         )
 
     # Several retries are skipped while reloads are stopped.
-    time.sleep(10)
+    instance.wait_for_log_line(
+        "Loading of embedded dictionaries is stopped", timeout=60, repetitions=2
+    )
     assert "Embedded dictionaries were not loaded" in instance.query_and_get_error(
         "SELECT regionToCountry(toUInt32(3))"
     )
