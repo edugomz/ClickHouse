@@ -873,6 +873,8 @@ private:
         info.exception = nullptr;
         info.state_id = 0;
         info.loading_id = 0;
+        /// So that `SYSTEM START RELOAD DICTIONARIES` does not reload what was unloaded explicitly.
+        info.blocked = false;
     }
 
     bool unload(Info * info)
