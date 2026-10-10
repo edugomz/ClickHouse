@@ -8,6 +8,7 @@
 #include <Common/Config/AbstractConfigurationComparison.h>
 #include <Common/CurrentThread.h>
 #include <Common/Exception.h>
+#include <Common/FailPoint.h>
 #include <Common/MemoryTrackerBlockerInThread.h>
 #include <Common/StringUtils.h>
 #include <Common/ThreadPool.h>
@@ -32,6 +33,11 @@ namespace ErrorCodes
 namespace ActionLocks
 {
     extern const StorageActionBlockType ReloadExternalDictionaries;
+}
+
+namespace FailPoints
+{
+    extern const char external_loader_pause_before_loading[];
 }
 
 namespace
@@ -1058,12 +1064,6 @@ private:
 
         putBackFinishedThreadsToPool();
 
-        /// Checked here (rather than trusted to be passed correctly by every caller) so that
-        /// SYSTEM STOP RELOAD DICTIONARIES is respected for every path that can trigger a load,
-        /// including config-driven reloads (setConfiguration) and eager initial loads
-        /// (enableAlwaysLoadEverything), not just the explicit reload/get paths.
-        bool reload_blocked = reload_blocker.isCancelled();
-
         /// All loadings have unique loading IDs.
         size_t loading_id = next_id_counter;
         ++next_id_counter;
@@ -1083,7 +1083,7 @@ private:
             ThreadFromGlobalPool thread;
             try
             {
-                thread = ThreadFromGlobalPool{&LoadingDispatcher::doLoading, this, info.name, loading_id, forced_to_reload, reload_blocked, min_id_to_finish_loading_dependencies_, true, CurrentThread::getGroup()};
+                thread = ThreadFromGlobalPool{&LoadingDispatcher::doLoading, this, info.name, loading_id, forced_to_reload, min_id_to_finish_loading_dependencies_, true, CurrentThread::getGroup()};
             }
             catch (...)
             {
@@ -1095,7 +1095,7 @@ private:
         else
         {
             /// Perform the loading immediately.
-            doLoading(info.name, loading_id, forced_to_reload, reload_blocked, min_id_to_finish_loading_dependencies_, false);
+            doLoading(info.name, loading_id, forced_to_reload, min_id_to_finish_loading_dependencies_, false);
         }
     }
 
@@ -1134,7 +1134,7 @@ private:
     }
 
     /// Does the loading, possibly in the separate thread.
-    void doLoading(const String & name, size_t loading_id, bool forced_to_reload, bool reload_blocked, size_t min_id_to_finish_loading_dependencies_, bool async, ThreadGroupPtr thread_group = {})
+    void doLoading(const String & name, size_t loading_id, bool forced_to_reload, size_t min_id_to_finish_loading_dependencies_, bool async, ThreadGroupPtr thread_group = {})
     {
         /// The blocker below covers this thread only, not the pipeline threads of the loading query.
         if (thread_group)
@@ -1146,6 +1146,7 @@ private:
         MemoryTrackerBlockerInThread memory_blocker;
 
         LOG_TRACE(log, "Start loading object '{}'", name);
+        FailPointInjection::pauseFailPoint(FailPoints::external_loader_pause_before_loading);
         try
         {
             /// Prepare for loading.
@@ -1156,6 +1157,20 @@ private:
                 if (!info)
                 {
                     LOG_TRACE(log, "Could not lock object '{}' for loading", name);
+                    return;
+                }
+
+                /// If reload is blocked and there is no previous version then do not load the object.
+                /// Loading can proceed with the previous version even if reload is blocked so that
+                /// a object that has already been loaded can be accessed.
+                /// Checked here rather than when the loading was queued, which can be before `SYSTEM START RELOAD DICTIONARIES`,
+                /// and under the same lock as setting `blocked`: `START` lifts the blocker before it takes this lock to requeue
+                /// the blocked objects, so either it sees `blocked` set here or this thread sees the blocker lifted.
+                if (reload_blocker.isCancelled() && (forced_to_reload || !info->object))
+                {
+                    LOG_TRACE(log, "Could not load object '{}': Reload is blocked", name);
+                    finishLoadingSingleObject(name, loading_id, /* blocked = */ true, lock);
+                    event.notify_all();
                     return;
                 }
             }
@@ -1169,18 +1184,6 @@ private:
             auto & loading_set = objects_being_loaded_by_current_thread();
             loading_set.insert(name);
             SCOPE_EXIT({ loading_set.erase(name); });
-
-            /// If reload is blocked and there is no previous version then do not load the object.
-            /// Loading can proceed with the previous version even if reload is blocked so that
-            /// a object that has already been loaded can be accessed.
-            if (reload_blocked && !previous_version_as_base_for_loading)
-            {
-                LOG_TRACE(log, "Could not load object '{}': Reload is blocked", name);
-                LoadingGuardForAsyncLoad lock(async, mutex);
-                finishLoadingSingleObject(name, loading_id, reload_blocked, lock);
-                event.notify_all();
-                return;
-            }
 
             /// Loading.
             auto [new_object, new_exception] = loadSingleObject(name, *info->config, previous_version_as_base_for_loading);
