@@ -703,9 +703,12 @@ public:
         std::lock_guard lock{mutex};
         /// Forced, because a blocked attempt may have been a reload for a changed config:
         /// a non-forced one would clone the previous version and keep its old config.
+        /// One `min_id` for all of them, as `loadImpl` does for `SYSTEM RELOAD DICTIONARIES`: an object
+        /// that loads another one while reloading then waits for that one's new version, not its old one.
+        size_t min_id = getMinIDToFinishLoading(/* forced_to_reload = */ true);
         for (auto & [name, info] : infos)
             if (info.blocked)
-                startLoading(info, /* forced_to_reload = */ true);
+                startLoading(info, /* forced_to_reload = */ true, min_id);
     }
 
     /// Starts reloading all the object which update time is earlier than now.
