@@ -167,7 +167,8 @@ std::pair<String, StoragePtr> createTableFromAST(
         else
         {
             columns = InterpreterCreateQuery::getColumnsDescription(*ast_create_query.columns_list, context, mode);
-            constraints = InterpreterCreateQuery::getConstraintsDescription(ast_create_query.columns_list->constraints, columns, context);
+            constraints = InterpreterCreateQuery::getConstraintsDescription(
+                ast_create_query.columns_list->constraints, columns, context, mode, ast_create_query.attach_short_syntax);
         }
     }
 

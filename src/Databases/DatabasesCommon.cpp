@@ -141,7 +141,8 @@ void validateCreateQuery(const ASTCreateQuery & query, const VirtualColumnsDescr
     }
     if (columns.constraints)
     {
-        InterpreterCreateQuery::getConstraintsDescription(columns.constraints, columns_desc, context);
+        InterpreterCreateQuery::getConstraintsDescription(
+            columns.constraints, columns_desc, context, LoadingStrictnessLevel::CREATE, /*attach_short_syntax=*/ false);
     }
     if (columns.projections)
     {

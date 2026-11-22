@@ -91,8 +91,17 @@ public:
     /// (ordinary views and external-target materialized views).
     /// The codecs declared with `CODEC name (...)` in the list are applied to the columns. `columns_list.columns` must not be null.
     static ColumnsDescription getColumnsDescription(const ASTColumns & columns_list, ContextPtr context, LoadingStrictnessLevel mode, bool is_restore_from_backup = false, bool check_defaults_over_virtual_columns = true);
-    static ConstraintsDescription
-    getConstraintsDescription(const ASTExpressionList * constraints, const ColumnsDescription & columns, ContextPtr local_context);
+    /// The constraint expressions are analysed only for a fresh definition (`isFreshTableDefinition`), not when a
+    /// definition is replayed: loaded from the metadata stored on this server, or applied as `SECONDARY_CREATE` (by the
+    /// other replicas of a `Replicated` database, by `RESTORE`). It was analysed when it was first created, and the
+    /// analysis executes a scalar subquery in a `CHECK`, which needs a query context to read a table function, while
+    /// the table loader has none.
+    static ConstraintsDescription getConstraintsDescription(
+        const ASTExpressionList * constraints,
+        const ColumnsDescription & columns,
+        ContextPtr local_context,
+        LoadingStrictnessLevel mode,
+        bool attach_short_syntax);
 
     static void prepareOnClusterQuery(ASTCreateQuery & create, ContextPtr context, const String & cluster_name);
 
